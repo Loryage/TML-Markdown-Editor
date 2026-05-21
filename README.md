@@ -3,12 +3,7 @@
    一个轻量但功能完整的桌面编辑器，专为 Markdown 写作而生。提供自动分屏预览、多标签管理、悬停放大与滚动同步，并支持导出 Word 文档，适合在拥挤桌面写作、快速记录与排版。
    
    软件已打包为exe，即点即用，源码已整理为main.py。
-
-<p align="center">
-  <video width="600" controls>
-    <source src="assets/show.mp4" type="video/mp4">
-  </video>
-</p>
+![视频演示](assets/show.mp4)
 
 ## 亮点特性
 
