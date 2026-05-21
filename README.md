@@ -4,11 +4,7 @@
    
    软件已打包为exe，即点即用，源码已整理为main.py。
 
-<p align="center">
-  <video width="600" controls>
-    <source src="assets/show.mp4" type="video/mp4">
-  </video>
-</p>
+![视频演示](assets/show.gif)
 
 ## 亮点特性
 
