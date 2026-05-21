@@ -4,7 +4,7 @@
    
    软件已打包为exe，即点即用，源码已整理为main.py。
 
-<img src="assets/screen.png" width="600" height="400" alt="编辑器分屏预览效果">
+<video src="assets/show.mp4" width="600" controls></video>
 
 ## 亮点特性
 
