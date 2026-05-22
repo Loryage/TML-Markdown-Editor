@@ -1,0 +1,13 @@
+
+# Core dependencies for TML Markdown Editor
+# Minimum recommended versions (adjust if you target specific platforms)
+PyQt6>=6.5.0
+Markdown>=3.4.1
+python-docx>=0.8.11
+Pygments>=2.10.0
+
+# Optional / tooling
+# - 用于打包或开发时可能需要的包，可按需安装
+# pip-tools>=6.13.0
+# wheel>=0.40.0
+

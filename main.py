@@ -120,13 +120,14 @@ class HoverWidget(QWidget):
 
 # ==================== 主窗口 ====================
 class MarkdownEditor(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_paths=None):
         super().__init__()
         icon_path = get_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
         self.setWindowTitle("TML Markdown 编辑器")
         self.resize(700, 600)
+        self.setAcceptDrops(True)
 
         self.split_enabled = False
         self.hovered_side = None
@@ -172,7 +173,8 @@ class MarkdownEditor(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("就绪")
 
-        self.new_tab()
+        if not self.open_file_paths(initial_paths or []):
+            self.new_tab()
 
     # ========== 滚动同步逻辑（百分比映射） ==========
     def sync_scroll(self, source_scrollbar, target_scrollbar):
@@ -297,7 +299,8 @@ class MarkdownEditor(QMainWindow):
     def new_tab(self, file_path=None, content=""):
         editor = CodeEditor()
         if file_path:
-            editor.load_file(file_path)
+            if not editor.load_file(file_path):
+                return None
             tab_name = os.path.basename(file_path)
         else:
             editor.setPlainText(content)
@@ -311,6 +314,31 @@ class MarkdownEditor(QMainWindow):
         if self.split_enabled:
             self.connect_scroll_sync()
         return editor
+
+    def open_file_paths(self, paths):
+        valid_paths = [path for path in paths if path and os.path.isfile(path)]
+        if not valid_paths:
+            return False
+
+        opened_any = False
+        for path in valid_paths:
+            editor = self.new_tab(file_path=path)
+            if editor is None:
+                continue
+            opened_any = True
+            self.status_bar.showMessage(f"已打开：{path}")
+
+        if opened_any:
+            current = self.current_editor()
+            if current and current.file_path:
+                ext = QFileInfo(current.file_path).suffix().lower()
+                is_md = ext in ["md", "markdown"]
+                if is_md != self.split_enabled:
+                    self.set_split_mode(is_md)
+                elif self.split_enabled:
+                    self.update_preview()
+
+        return opened_any
 
     def close_tab(self, index):
         editor = self.tab_widget.widget(index)
@@ -415,15 +443,20 @@ class MarkdownEditor(QMainWindow):
             "文本文件 (*.txt *.md *.markdown *.tex);;所有文件 (*)"
         )
         if path:
-            editor = self.new_tab(file_path=path)
-            if editor.file_path is None:
-                self.tab_widget.removeTab(self.tab_widget.indexOf(editor))
-                return
-            ext = QFileInfo(path).suffix().lower()
-            is_md = ext in ["md", "markdown"]
-            if is_md != self.split_enabled:
-                self.set_split_mode(is_md)
-            self.status_bar.showMessage(f"已打开：{path}")
+            self.open_file_paths([path])
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() and any(url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if self.open_file_paths(paths):
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
 
     def save_file(self):
         editor = self.current_editor()
@@ -721,6 +754,7 @@ if __name__ == "__main__":
     icon_path = get_icon_path()
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))
-    window = MarkdownEditor()
+    initial_paths = [path for path in sys.argv[1:] if os.path.isfile(path)]
+    window = MarkdownEditor(initial_paths)
     window.show()
     sys.exit(app.exec())
