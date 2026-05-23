@@ -4,6 +4,8 @@
 import sys
 import os
 import ctypes
+import html as html_lib
+import re
 import markdown
 try:
     from docx import Document
@@ -16,7 +18,10 @@ from PyQt6.QtWidgets import (
     QTabWidget, QDialog, QPushButton
 )
 from PyQt6.QtGui import QAction, QFont, QSyntaxHighlighter, QTextCharFormat, QColor, QIcon
-from PyQt6.QtCore import Qt, QFileInfo
+from PyQt6.QtCore import Qt, QFileInfo, QUrl, QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtWebChannel import QWebChannel
 
 
 # ==================== Markdown 语法高亮器 ====================
@@ -118,6 +123,243 @@ class HoverWidget(QWidget):
         super().leaveEvent(event)
 
 
+class PreviewBridge(QObject):
+    scrollPercentChanged = pyqtSignal(float)
+
+    @pyqtSlot(float)
+    def reportScrollPercent(self, percent):
+        self.scrollPercentChanged.emit(percent)
+
+
+def get_resource_base_dir():
+    return getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+
+
+def get_resource_url(*parts):
+    return QUrl.fromLocalFile(os.path.join(get_resource_base_dir(), *parts))
+
+
+def convert_special_markdown(text):
+    math_tokens = []
+
+    def protect_math(match):
+        placeholder = f"@@TMLMATH{len(math_tokens)}@@"
+        math_tokens.append((placeholder, match.group(0)))
+        return placeholder
+
+    text = re.sub(r"\$\$(.+?)\$\$", protect_math, text, flags=re.S)
+    text = re.sub(r"(?<!\\)\$([^$\n]+?)\$", protect_math, text)
+
+    mermaid_blocks = []
+
+    def protect_mermaid(match):
+        placeholder = f"@@TMLMERMAID{len(mermaid_blocks)}@@"
+        code = html_lib.escape(match.group(1).strip())
+        mermaid_blocks.append((placeholder, f'<div class="mermaid">{code}</div>'))
+        return placeholder
+
+    text = re.sub(r"```mermaid\s*\n(.*?)\n```", protect_mermaid, text, flags=re.S | re.I)
+
+    text = re.sub(r"(?<!\\)~([^~\n]+?)~", r"<sub>\1</sub>", text)
+    text = re.sub(r"(?<!\\)\^([^\^\n]+?)\^", r"<sup>\1</sup>", text)
+
+    for placeholder, original in math_tokens:
+        text = text.replace(placeholder, original)
+    for placeholder, original in mermaid_blocks:
+        text = text.replace(placeholder, original)
+
+    return text
+
+
+def build_preview_html(markdown_text):
+    converted_text = convert_special_markdown(markdown_text)
+    body_html = markdown.markdown(
+        converted_text,
+        extensions=['extra', 'codehilite', 'tables', 'fenced_code']
+    )
+
+    base_url = get_resource_url()
+    mathjax_url = get_resource_url('assets', 'vendor', 'mathjax', 'tex-svg.js').toString()
+    mermaid_url = get_resource_url('assets', 'vendor', 'mermaid', 'mermaid.min.js').toString()
+    webchannel_url = 'qrc:///qtwebchannel/qwebchannel.js'
+
+    css = """
+    <style>
+        :root {
+            color-scheme: light;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #f7f7fb;
+            color: #1f2937;
+            font-family: 'Segoe UI', 'Noto Sans SC', sans-serif;
+            font-size: 14px;
+            line-height: 1.75;
+        }
+        #content {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 24px 28px 72px;
+            box-sizing: border-box;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            line-height: 1.25;
+            margin: 1.2em 0 0.6em;
+            color: #0f172a;
+        }
+        h1 { font-size: 2rem; border-bottom: 1px solid #dbe1ea; padding-bottom: 0.3em; }
+        h2 { font-size: 1.5rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.2em; }
+        p, ul, ol, blockquote, table, pre, .mermaid { margin: 0.9em 0; }
+        a { color: #0366d6; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code {
+            font-family: 'Cascadia Mono', 'Consolas', monospace;
+            background: #eef2f7;
+            color: #0f172a;
+            border-radius: 6px;
+            padding: 0.15em 0.35em;
+        }
+        pre {
+            background: #0b1020;
+            color: #e5eefb;
+            border-radius: 12px;
+            padding: 16px;
+            overflow: auto;
+        }
+        pre code {
+            background: transparent;
+            color: inherit;
+            padding: 0;
+        }
+        blockquote {
+            border-left: 4px solid #7c3aed;
+            margin-left: 0;
+            padding: 0.4em 1em;
+            color: #4b5563;
+            background: rgba(124, 58, 237, 0.06);
+            border-radius: 0 10px 10px 0;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            display: block;
+            overflow-x: auto;
+        }
+        th, td {
+            border: 1px solid #d1d5db;
+            padding: 0.55em 0.8em;
+            text-align: left;
+        }
+        th { background: #eef2ff; }
+        img { max-width: 100%; height: auto; }
+        .mermaid {
+            background: white;
+            border: 1px solid #dbe1ea;
+            border-radius: 12px;
+            padding: 16px;
+            overflow-x: auto;
+        }
+    </style>
+    """
+
+    script = f"""
+    <script>
+        window.MathJax = {{
+            tex: {{
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true,
+                packages: {{'[+]': ['ams']}}
+            }},
+            svg: {{ fontCache: 'global' }},
+            options: {{
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+            }}
+        }};
+    </script>
+    <script src="{mathjax_url}"></script>
+    <script src="{mermaid_url}"></script>
+    <script src="{webchannel_url}"></script>
+    <script>
+        window.setScrollPercent = function(percent) {{
+            const doc = document.scrollingElement || document.documentElement;
+            const maxScroll = Math.max(0, doc.scrollHeight - doc.clientHeight);
+            const clamped = Math.max(0, Math.min(1, percent));
+            doc.scrollTop = maxScroll <= 0 ? 0 : Math.round(maxScroll * clamped);
+        }};
+
+        window.renderPreview = async function() {{
+            const tasks = [];
+
+            if (window.mermaid) {{
+                mermaid.initialize({{
+                    startOnLoad: false,
+                    securityLevel: 'loose',
+                    theme: 'neutral'
+                }});
+                tasks.push(mermaid.run({{ querySelector: '#content .mermaid' }}).catch(function(error) {{
+                    console.error(error);
+                }}));
+            }}
+
+            if (window.MathJax && MathJax.typesetPromise) {{
+                tasks.push(MathJax.typesetPromise().catch(function(error) {{
+                    console.error(error);
+                }}));
+            }}
+
+            await Promise.all(tasks);
+
+            if (typeof window.__pendingScrollPercent === 'number') {{
+                window.setScrollPercent(window.__pendingScrollPercent);
+            }}
+        }};
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            new QWebChannel(qt.webChannelTransport, function(channel) {{
+                window.tmlBridge = channel.objects.tmlBridge;
+                const sendScroll = function() {{
+                    const doc = document.scrollingElement || document.documentElement;
+                    const maxScroll = Math.max(1, doc.scrollHeight - doc.clientHeight);
+                    window.tmlBridge.reportScrollPercent(doc.scrollTop / maxScroll);
+                }};
+
+                let scheduled = false;
+                window.addEventListener('scroll', function() {{
+                    if (scheduled) {{
+                        return;
+                    }}
+                    scheduled = true;
+                    requestAnimationFrame(function() {{
+                        scheduled = false;
+                        sendScroll();
+                    }});
+                }}, {{ passive: true }});
+
+                window.renderPreview();
+                sendScroll();
+            }});
+        }});
+    </script>
+    """
+
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="{base_url.toString()}/">
+{css}
+{script}
+</head>
+<body>
+<div id="content">
+{body_html}
+</div>
+</body>
+</html>"""
+
+
 # ==================== 主窗口 ====================
 class MarkdownEditor(QMainWindow):
     def __init__(self, initial_paths=None):
@@ -132,15 +374,24 @@ class MarkdownEditor(QMainWindow):
         self.split_enabled = False
         self.hovered_side = None
         self._syncing_scroll = False  # 防止循环同步
+        self._preview_loaded = False
+        self._preview_scroll_percent = 0.0
 
         # 中央分割器
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(self.splitter)
 
         # 左侧预览区
-        self.preview = QTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.setFont(QFont("Segoe UI", 10))
+        self.preview = QWebEngineView()
+        self.preview.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.preview.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+        self.preview.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
+        self.preview.page().loadFinished.connect(self.on_preview_load_finished)
+        self.preview_bridge = PreviewBridge(self)
+        self.preview_bridge.scrollPercentChanged.connect(self.on_preview_scroll_percent)
+        self.preview_channel = QWebChannel(self.preview.page())
+        self.preview_channel.registerObject("tmlBridge", self.preview_bridge)
+        self.preview.page().setWebChannel(self.preview_channel)
         self.left_container = HoverWidget(
             self.preview,
             self.on_hover_enter,
@@ -193,25 +444,41 @@ class MarkdownEditor(QMainWindow):
             target_scrollbar.setValue(tgt_val)
         self._syncing_scroll = False
 
+    def scrollbar_percent(self, scrollbar):
+        minimum = scrollbar.minimum()
+        maximum = scrollbar.maximum()
+        if maximum <= minimum:
+            return 0.0
+        return (scrollbar.value() - minimum) / (maximum - minimum)
+
+    def set_scrollbar_percent(self, scrollbar, percent):
+        minimum = scrollbar.minimum()
+        maximum = scrollbar.maximum()
+        if maximum <= minimum:
+            scrollbar.setValue(minimum)
+            return
+        clamped = max(0.0, min(1.0, percent))
+        scrollbar.setValue(int(minimum + clamped * (maximum - minimum)))
+
+    def set_preview_scroll_percent(self, percent):
+        self._preview_scroll_percent = max(0.0, min(1.0, percent))
+        if not self._preview_loaded or not self.split_enabled:
+            return
+        self.preview.page().runJavaScript(f"window.setScrollPercent({self._preview_scroll_percent:.8f});")
+
     def connect_scroll_sync(self):
         """连接当前编辑区和预览区的滚动同步信号"""
         editor = self.current_editor()
         if editor and self.split_enabled:
             editor_vscroll = editor.verticalScrollBar()
-            preview_vscroll = self.preview.verticalScrollBar()
             # 断开旧连接避免重复
             try:
                 editor_vscroll.valueChanged.disconnect(self.on_editor_scroll)
             except TypeError:
                 pass
-            try:
-                preview_vscroll.valueChanged.disconnect(self.on_preview_scroll)
-            except TypeError:
-                pass
             editor_vscroll.valueChanged.connect(self.on_editor_scroll)
-            preview_vscroll.valueChanged.connect(self.on_preview_scroll)
             # 初始同步一次
-            self.sync_scroll(editor_vscroll, preview_vscroll)
+            self.on_editor_scroll(editor_vscroll.value())
 
     def disconnect_scroll_sync(self):
         """断开滚动同步"""
@@ -221,24 +488,26 @@ class MarkdownEditor(QMainWindow):
                 editor.verticalScrollBar().valueChanged.disconnect(self.on_editor_scroll)
             except TypeError:
                 pass
-        try:
-            self.preview.verticalScrollBar().valueChanged.disconnect(self.on_preview_scroll)
-        except TypeError:
-            pass
 
     def on_editor_scroll(self, value):
-        if not self.split_enabled:
+        if not self.split_enabled or self._syncing_scroll:
             return
         editor = self.current_editor()
         if editor:
-            self.sync_scroll(editor.verticalScrollBar(), self.preview.verticalScrollBar())
+            percent = self.scrollbar_percent(editor.verticalScrollBar())
+            self.set_preview_scroll_percent(percent)
 
-    def on_preview_scroll(self, value):
-        if not self.split_enabled:
+    def on_preview_scroll_percent(self, percent):
+        if not self.split_enabled or self._syncing_scroll:
             return
         editor = self.current_editor()
         if editor:
-            self.sync_scroll(self.preview.verticalScrollBar(), editor.verticalScrollBar())
+            current_percent = self.scrollbar_percent(editor.verticalScrollBar())
+            if abs(current_percent - percent) < 0.01:
+                return
+            self._syncing_scroll = True
+            self.set_scrollbar_percent(editor.verticalScrollBar(), percent)
+            self._syncing_scroll = False
 
     # ========== 悬停放大逻辑 ==========
     def on_hover_enter(self, hover_widget):
@@ -476,76 +745,23 @@ class MarkdownEditor(QMainWindow):
         if not editor or not self.split_enabled:
             return
         md_text = editor.toPlainText()
-        try:
-            html = markdown.markdown(
-                md_text,
-                extensions=['extra', 'codehilite', 'tables', 'fenced_code']
-            )
-        except Exception as e:
-            html = f"<p>渲染错误：{str(e)}</p>"
-        css = """
-        <style>
-            body {
-                font-family: 'Segoe UI', 'Roboto', sans-serif;
-                font-size: 14px;
-                line-height: 1.6;
-                margin: 20px;
-                background-color: #fafafa;
-                color: #2c3e50;
-            }
-            h1 { color: #2980b9; border-bottom: 1px solid #ddd; }
-            h2 { color: #3498db; }
-            code {
-                background-color: #f4f4f4;
-                padding: 2px 4px;
-                border-radius: 3px;
-                font-family: 'Courier New', monospace;
-                font-size: 0.9em;
-            }
-            pre {
-                background-color: #f4f4f4;
-                padding: 10px;
-                border-radius: 5px;
-                overflow-x: auto;
-            }
-            blockquote {
-                border-left: 4px solid #3498db;
-                margin-left: 0;
-                padding-left: 15px;
-                color: #7f8c8d;
-            }
-            table {
-                border-collapse: collapse;
-                width: 100%;
-            }
-            th, td {
-                border: 1px solid #ddd;
-                padding: 8px;
-                text-align: left;
-            }
-            th {
-                background-color: #ecf0f1;
-            }
-        </style>
-        """
-        full_html = f"<html><head>{css}</head><body>{html}</body></html>"
-        # 保存当前滚动百分比
         editor_vscroll = editor.verticalScrollBar()
-        src_min = editor_vscroll.minimum()
-        src_max = editor_vscroll.maximum()
-        src_val = editor_vscroll.value()
-        percent = (src_val - src_min) / (src_max - src_min) if src_max > src_min else 0.0
+        self._preview_scroll_percent = self.scrollbar_percent(editor_vscroll)
+        self._preview_loaded = False
+        try:
+            full_html = build_preview_html(md_text)
+        except Exception as e:
+            full_html = build_preview_html(f"# 渲染错误\n\n{html_lib.escape(str(e))}")
+        self.preview.setHtml(full_html, get_resource_url())
 
-        self.preview.setHtml(full_html)
-
-        # 恢复预览区的滚动百分比
-        preview_vscroll = self.preview.verticalScrollBar()
-        tgt_min = preview_vscroll.minimum()
-        tgt_max = preview_vscroll.maximum()
-        tgt_val = int(tgt_min + percent * (tgt_max - tgt_min))
-        self._syncing_scroll = True
-        preview_vscroll.setValue(tgt_val)
-        self._syncing_scroll = False
+    def on_preview_load_finished(self, ok):
+        self._preview_loaded = bool(ok)
+        if not ok or not self.split_enabled:
+            return
+        self.preview.page().runJavaScript(
+            f"window.__pendingScrollPercent = {self._preview_scroll_percent:.8f}; "
+            "window.renderPreview && window.renderPreview();"
+        )
 
     # ========== 导出 Word ==========
     def export_to_word(self):
@@ -724,15 +940,11 @@ class MarkdownEditor(QMainWindow):
 
     def preview_zoom_in(self):
         if self.split_enabled:
-            font = self.preview.font()
-            font.setPointSize(font.pointSize() + 1)
-            self.preview.setFont(font)
+            self.preview.setZoomFactor(self.preview.zoomFactor() + 0.1)
 
     def preview_zoom_out(self):
         if self.split_enabled:
-            font = self.preview.font()
-            font.setPointSize(max(8, font.pointSize() - 1))
-            self.preview.setFont(font)
+            self.preview.setZoomFactor(max(0.4, self.preview.zoomFactor() - 0.1))
 
 
 def get_icon_path():

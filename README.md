@@ -1,6 +1,6 @@
-# TML Markdown Editor v1.1
+# TML Markdown Editor v1.11
 
-   一个轻量但功能完整的桌面编辑器，专为 Markdown 写作而生。提供自动分屏预览、多标签管理、悬停放大与滚动同步，并支持导出 Word 文档，适合在拥挤桌面写作、快速记录与排版。
+   一个轻量但功能完整的桌面编辑器，专为 Markdown 写作而生。提供自动分屏预览、多标签管理、悬停放大与滚动同步，并支持导出 Word 文档，适合在拥挤桌面写作、快速记录与排版。现已支持复杂公式渲染。
    
    软件已打包为exe，即点即用，源码已整理为main.py。演示视频（有概率加载失败变为空白）：
 
@@ -35,18 +35,19 @@
 
 ## 运行与依赖
 
-- 依赖：PyQt6、markdown、python-docx
+- 依赖：PyQt6、PyQt6-WebEngine、markdown、python-docx
 - 运行：python main.py
 - 配置：您可以在requirements中获取详细配置
 
 ## 适用场景
+
 - 轻量文稿整理与导出
 - Markdown 轻写作与排版
 - 技术文档草拟与预览
 
 ### 目前问题
 
-- Markdown中部分图片和公式无法正常显示
+- 体积变大，打开和响应速度变慢
 - word导出功能欠佳
 - 会被其他窗口盖住，不用时应缩到屏幕边
 
