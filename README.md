@@ -1,4 +1,4 @@
-# TML Markdown Editor v1.11
+# TML Markdown Editor v1.12
 
    一个轻量但功能完整的桌面编辑器，专为 Markdown 写作而生。提供自动分屏预览、多标签管理、悬停放大与滚动同步，并支持导出 Word 文档，适合在拥挤桌面写作、快速记录与排版。现已支持复杂公式渲染。
    
